@@ -1,6 +1,7 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { toast } from 'sonner';
+import { supabase } from '@/integrations/supabase/client';
 
 type SessionStatus = 'active' | 'ended' | 'paused';
 type PermissionStatus = 'pending' | 'granted' | 'denied' | 'expired';
@@ -46,9 +47,36 @@ export const useCourtSession = (caseId: string) => {
   // For now, return mock/empty states
 
   const fetchSession = useCallback(async () => {
-    setIsLoading(false);
+    if (!caseId) {
+      setIsLoading(false);
+      return null;
+    }
+
+    try {
+      const { data: session, error } = await supabase
+        .from('session_logs')
+        .select('*')
+        .eq('case_id', caseId)
+        .eq('status', 'active')
+        .maybeSingle();
+
+      if (error) {
+        console.error('Error fetching session:', error);
+      } else if (session) {
+        setActiveSession(session);
+      }
+    } catch (error) {
+      console.error('Error fetching session:', error);
+    } finally {
+      setIsLoading(false);
+    }
     return null;
-  }, []);
+  }, [caseId]);
+
+  // Fetch session on mount
+  useEffect(() => {
+    fetchSession();
+  }, [fetchSession]);
 
   const fetchPermissions = useCallback(async (_sessionId?: string) => {
     setPermissionRequests([]);
@@ -61,38 +89,100 @@ export const useCourtSession = (caseId: string) => {
       return null;
     }
 
-    // Mock session creation
-    const mockSession: CourtSession = {
-      id: `session-${Date.now()}`,
-      case_id: caseId,
-      judge_id: profile.id,
-      status: 'active',
-      started_at: new Date().toISOString(),
-      ended_at: null,
-      notes: null,
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    };
+    try {
+      console.log('🚀 Starting new court session for case:', caseId);
+      
+      const { data: session, error } = await supabase
+        .from('session_logs')
+        .insert({
+          case_id: caseId,
+          judge_id: profile.id,
+          status: 'active',
+          started_at: new Date().toISOString(),
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        })
+        .select()
+        .single();
 
-    setActiveSession(mockSession);
-    toast.success('Court session started');
-    return mockSession;
+      if (error) {
+        console.error('❌ Error creating session:', error);
+        toast.error('Failed to start court session');
+        return null;
+      }
+
+      console.log('✅ Session created successfully:', session);
+      setActiveSession(session);
+      toast.success('Court session started');
+      return session;
+    } catch (error) {
+      console.error('❌ Error starting session:', error);
+      toast.error('Failed to start court session');
+      return null;
+    }
   };
 
-  const endSession = async (_notes?: string) => {
+  const endSession = async (notes?: string) => {
     if (!isJudge || !activeSession || !profile?.id) {
       toast.error('Cannot end session');
       return false;
     }
 
-    setActiveSession(null);
-    toast.success('Court session ended');
-    return true;
+    try {
+      console.log('🛑 Ending court session:', activeSession.id);
+      
+      const { error } = await supabase
+        .from('session_logs')
+        .update({
+          status: 'ended',
+          ended_at: new Date().toISOString(),
+          notes: notes || null,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', activeSession.id);
+
+      if (error) {
+        console.error('❌ Error ending session:', error);
+        toast.error('Failed to end court session');
+        return false;
+      }
+
+      console.log('✅ Session ended successfully');
+      setActiveSession(null);
+      toast.success('Court session ended');
+      return true;
+    } catch (error) {
+      console.error('❌ Error ending session:', error);
+      toast.error('Failed to end court session');
+      return false;
+    }
   };
 
-  const updateNotes = async (_notes: string) => {
+  const updateNotes = async (notes: string) => {
     if (!activeSession) return false;
-    return true;
+
+    try {
+      console.log('📝 Updating session notes:', activeSession.id);
+      
+      const { error } = await supabase
+        .from('session_logs')
+        .update({
+          notes: notes,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', activeSession.id);
+
+      if (error) {
+        console.error('❌ Error updating notes:', error);
+        return false;
+      }
+
+      console.log('✅ Notes updated successfully');
+      return true;
+    } catch (error) {
+      console.error('❌ Error updating notes:', error);
+      return false;
+    }
   };
 
   const requestPermission = async () => {
